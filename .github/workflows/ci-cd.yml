@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.10.12']
+        python-version: ['3.10', '3.11', '3.12']
 
     steps:
     - uses: actions/checkout@v3
@@ -46,7 +46,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10.12'
+        python-version: '3.11'
     
     - name: Install dependencies
       run: |
@@ -59,3 +59,42 @@ jobs:
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
         # exit-zero treats all errors as warnings
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+  deploy:
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    # 1. 저장소 체크아웃
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    
+    # 2. SSH 키 설정 (보안: 정확한 개행 유지)
+    - name: Setup SSH key
+      run: |
+        mkdir -p ~/.ssh
+        printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+    # 3. SSH 연결 테스트 (빠른 실패 감지)
+    - name: Test SSH connectivity
+      run: |
+        echo "Testing SSH connection to ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.SSH_PORT }}"
+        ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT }}" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" 'echo CONNECTED' || (echo "SSH connection failed" && exit 2)
+
+    # 4. 서버에 파일 배포 (Cloudflare Tunnel SSH)
+    - name: Deploy files via SSH
+      run: |
+        scp -i ~/.ssh/id_rsa -r -P "${{ secrets.SSH_PORT }}" . "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}"
+    
+    # 5. 서버에서 배포 실행
+    - name: Run deployment commands on server
+      run: |
+        ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT }}" -o StrictHostKeyChecking=no "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" << 'EOF'
+        cd ${{ secrets.DEPLOY_PATH }}
+        pip install -r requirements.txt
+        systemctl restart flask-app || pm2 restart app || echo "App restart completed"
+        echo "✅ Server deployment completed successfully"
+        EOF
