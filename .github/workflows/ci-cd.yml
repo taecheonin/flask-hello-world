@@ -89,12 +89,27 @@ jobs:
       run: |
         scp -i ~/.ssh/id_rsa -r -P "${{ secrets.SSH_PORT }}" . "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}"
     
-    # 5. 서버에서 배포 실행
+    # 5. 서버에서 배포 실행 및 가상환경 설정
     - name: Run deployment commands on server
       run: |
         ssh -i ~/.ssh/id_rsa -p "${{ secrets.SSH_PORT }}" -o StrictHostKeyChecking=no "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" << 'EOF'
         cd ${{ secrets.DEPLOY_PATH }}
+        
+        # 가상환경 생성 (존재하지 않으면)
+        if [ ! -d "venv" ]; then
+          echo "Creating Python virtual environment..."
+          python3 -m venv venv
+        fi
+        
+        # 가상환경 활성화 및 패키지 설치
+        source venv/bin/activate
+        echo "Upgrading pip..."
+        pip install --upgrade pip
+        echo "Installing requirements..."
         pip install -r requirements.txt
+        
+        # Flask 앱 재시작
+        echo "Restarting Flask application..."
         systemctl restart flask-app || pm2 restart app || echo "App restart completed"
-        echo "✅ Server deployment completed successfully"
+        echo "✅ Server deployment and setup completed successfully"
         EOF
